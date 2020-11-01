@@ -1,0 +1,11 @@
+*.pyc
+__pycache__
+.idea/
+figures/
+*/.DS_Store
+.DS_Store
+*.ipynb_checkpoints
+*.zip
+*.eps
+*.png
+*.ai
