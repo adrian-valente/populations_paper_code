@@ -10,6 +10,7 @@ from low_rank_rnns.helpers import map_device, remove_axes
 deltaT = 20.
 tau = 100
 alpha = deltaT / tau
+std_default = 3e-2
 
 fixation_duration = 100
 stimulus1_duration_min = 500
@@ -49,7 +50,7 @@ def setup():
         max_stimulus2_duration_discrete + decision_duration_discrete
 
 
-def generate_dms_data(num_trials, type=None, fraction_validation_trials=.2, fraction_catch_trials=0., std=3e-2):
+def generate_dms_data(num_trials, type=None, fraction_validation_trials=.2, fraction_catch_trials=0., std=std_default):
     x = std * torch.randn(num_trials, total_duration, 2)
     y = torch.zeros(num_trials, total_duration, 1)
     mask = torch.zeros(num_trials, total_duration, 1)
@@ -128,10 +129,28 @@ def test_dms(net, x, y, mask):
     return loss, acc
 
 
-def plot_trial_epochs(net, input, epochs, rect=None, savepath=None, fp_load=None, sizes=1., axes=None):
-    """
-    Helper for supplementary figures plotting of detailed state-space trajectories
-    """
+def confusion_matrix(net):
+    matrix = np.zeros((4, 2))
+    rows = ["A-A", "B-B", "A-B", "B-A"]
+    for i, type in enumerate(rows):
+        x, y, mask, _, _, _ = generate_dms_data(100, type=type, fraction_validation_trials=0.)
+        x, y, mask = map_device([x, y, mask], net)
+        output = net.forward(x)
+        mask_bool = (mask[:, :, 0] == 1)
+        decisions_filtered = torch.stack(output.squeeze()[mask_bool].chunk(output.shape[0]))
+        decisions = torch.sign(decisions_filtered.mean(dim=1))
+        matrix[i, 0] = (decisions < 0).sum().type(torch.float) / decisions.shape[0]
+        matrix[i, 1] = (decisions >= 0).sum().type(torch.float) / decisions.shape[0]
+    cols = ["different", "same"]
+    print("{:^12s}|{:^12s}|{:^12s}".format(" ", cols[0], cols[1]))
+    print("-"*40)
+    for i, row in enumerate(rows):
+        print("{:^12s}|{:^12.2f}|{:^12.2f}".format(row, matrix[i, 0], matrix[i, 1]))
+        print("-"*40)
+
+
+def plot_trial_epochs(net, input, epochs, scalings=True, rect=None, savepath=None, fp_load=None, sizes=1.,
+                      axes=None):
     def get_input(input, time):
         if input[0, time, 0] == 0 and input[0, time, 1] == 0:
             return 0
@@ -144,8 +163,12 @@ def plot_trial_epochs(net, input, epochs, rect=None, savepath=None, fp_load=None
     m2 = net.m[:,1].detach().numpy()
     output, trajectories = net.forward(input, return_dynamics=True)
     trajectories = trajectories.squeeze().detach().numpy()
-    proj1 = trajectories @ m1 / net.hidden_size
-    proj2 = trajectories @ m2 / net.hidden_size
+    if scalings:
+        proj1 = trajectories @ m1 / sqrt(net.hidden_size)
+        proj2 = trajectories @ m2 / sqrt(net.hidden_size)
+    else:
+        proj1 = trajectories @ m1 / net.hidden_size
+        proj2 = trajectories @ m2 / net.hidden_size
     if rect is None:
         xmin, xmax, ymin, ymax = proj1.min(), proj1.max(), proj2.min(), proj2.max()
     else:
@@ -155,12 +178,19 @@ def plot_trial_epochs(net, input, epochs, rect=None, savepath=None, fp_load=None
             fig, ax = plt.subplots()
         else:
             ax = axes[i]
-        if fp_load is not None:
-            ranktwo.plot_field(net, m1, m2, xmin, xmax, ymin, ymax, input=input[0, epochs[i]], ax=ax, sizes=sizes,
-                                      add_fixed_points=True, fp_load=fp_load[get_input(input, epochs[i])])
+        if scalings:
+            if fp_load is not None:
+                ranktwo.plot_field(net, m1, m2, xmin, xmax, ymin, ymax, input=input[0, epochs[i]], ax=ax, sizes=sizes,
+                               add_fixed_points=True, fp_load=fp_load[get_input(input, epochs[i])])
+            else:
+                ranktwo.plot_field(net, m1, m2, xmin, xmax, ymin, ymax, input=input[0, epochs[i]], ax=ax, sizes=sizes)
         else:
-            ranktwo.plot_field(net, m1, m2, xmin, xmax, ymin, ymax, input=input[0, epochs[i]], ax=ax,
-                                          sizes=sizes)
+            if fp_load is not None:
+                ranktwo.plot_field_noscalings(net, m1, m2, xmin, xmax, ymin, ymax, input=input[0, epochs[i]], ax=ax, sizes=sizes,
+                                          add_fixed_points=True, fp_load=fp_load[get_input(input, epochs[i])])
+            else:
+                ranktwo.plot_field_noscalings(net, m1, m2, xmin, xmax, ymin, ymax, input=input[0, epochs[i]], ax=ax,
+                                              sizes=sizes)
         ax.plot(proj1[epochs[i]:epochs[i+1]], proj2[epochs[i]:epochs[i+1]], c='r', lw=4)
         if i > 0:
             ax.plot(proj1[:epochs[i]], proj2[:epochs[i]], c='r', ls='--', lw=4)
@@ -171,9 +201,6 @@ def plot_trial_epochs(net, input, epochs, rect=None, savepath=None, fp_load=None
 
 def plot_trajectories_steps_ranktwo(net, rect=None, scalings=True, savepath=None, fp_load=None, sizes=1.,
                                     ax=None):
-    """
-    Plotting of detailed state-space trajectories for supplementary figures
-    """
     stim1_begin = fixation_duration_discrete
     stim1_end = fixation_duration_discrete + max_stimulus1_duration_discrete
     stim2_begin = stim1_end + max_delay_duration_discrete
@@ -206,7 +233,8 @@ def plot_trajectories_steps_ranktwo(net, rect=None, scalings=True, savepath=None
                                   axes=ax[i])
 
 
-def plot_trajectories_summary_ranktwo(net, rect=None, plot_wo=False, wo_scale=1., legend=False,
+
+def plot_trajectories_summary_ranktwo(net, rect=None, plot_wo=False, wo_scale=1., scalings=False, legend=False,
                                       figsize=(8, 8), alt_naming=False, timepoints=False, ax=None):
     """
     Make a plot of all 4 trajectories with flow field
@@ -231,7 +259,7 @@ def plot_trajectories_summary_ranktwo(net, rect=None, plot_wo=False, wo_scale=1.
     input[(0, 2), stim2_begin:stim2_end, 0] = 1
     input[(2, 3), stim1_begin:stim1_end, 1] = 1
     input[(1, 3), stim2_begin:stim2_end, 1] = 1
-    colors = ['orange', 'red', 'cyan', 'hotpink']
+    colors = ['darkorange', 'red', 'cyan', 'mediumorchid']
     labels = ['A-A', 'A-B', 'B-A', 'B-B']
 
     m1 = net.m[:, 0].detach().numpy()
@@ -241,8 +269,12 @@ def plot_trajectories_summary_ranktwo(net, rect=None, plot_wo=False, wo_scale=1.
         m2 = net.m_rec[:, 1].detach().numpy()
     output, trajectories = net.forward(input, return_dynamics=True)
     trajectories = trajectories.squeeze().detach().numpy()
-    projections1 = trajectories @ m1 / net.hidden_size
-    projections2 = trajectories @ m2 / net.hidden_size
+    if scalings:
+        projections1 = trajectories @ m1 / sqrt(net.hidden_size)
+        projections2 = trajectories @ m2 / sqrt(net.hidden_size)
+    else:
+        projections1 = trajectories @ m1 / net.hidden_size
+        projections2 = trajectories @ m2 / net.hidden_size
 
     if rect is None:
         xmin, xmax, ymin, ymax = projections1.min(), projections1.max(), projections2.min(), projections2.max()
@@ -250,7 +282,10 @@ def plot_trajectories_summary_ranktwo(net, rect=None, plot_wo=False, wo_scale=1.
         xmin, xmax, ymin, ymax = rect
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
-    _, map = ranktwo.plot_field(net, m1, m2, xmin, xmax, ymin, ymax, ax=ax, res=100)
+    if scalings:
+        _, map = ranktwo.plot_field(net, m1, m2, xmin, xmax, ymin, ymax, ax=ax, res=100, alt_naming=alt_naming)
+    else:
+        _, map = ranktwo.plot_field_noscalings(net, m1, m2, xmin, xmax, ymin, ymax, ax=ax, res=100)
     for i in range(4):
         ax.plot(projections1[i], projections2[i], lw=3, c=colors[i], label=labels[i])
         if timepoints:
@@ -260,7 +295,10 @@ def plot_trajectories_summary_ranktwo(net, rect=None, plot_wo=False, wo_scale=1.
     # Plot the wo vector projection
     if plot_wo:
         wo = net.wo.squeeze().detach().numpy()
-        readout1, readout2 = wo @ m1 / net.hidden_size, wo @ m2 / net.hidden_size
+        if scalings:
+            readout1, readout2 = wo @ m1, wo @ m2
+        else:
+            readout1, readout2 = wo @ m1 / net.hidden_size, wo @ m2 / net.hidden_size
         print(readout1)
         print(readout2)
         ax.quiver(0, 0, readout1, readout2, color='yellow', scale=wo_scale)
@@ -272,6 +310,27 @@ def plot_trajectories_summary_ranktwo(net, rect=None, plot_wo=False, wo_scale=1.
     if legend:
         ax.legend(loc='upper right', framealpha=1, frameon=True)
     return map
+
+
+def plot_outputs(net):
+    stim1_begin = fixation_duration_discrete
+    stim1_end = fixation_duration_discrete + max_stimulus1_duration_discrete
+    stim2_begin = stim1_end + max_delay_duration_discrete
+    stim2_end = stim2_begin + max_stimulus2_duration_discrete
+    decision_end = stim2_end + decision_duration_discrete
+    input = torch.zeros(4, decision_end, 2)
+    input[(0, 1), stim1_begin:stim1_end, 0] = 1
+    input[(0, 2), stim2_begin:stim2_end, 0] = 1
+    input[(2, 3), stim1_begin:stim1_end, 1] = 1
+    input[(1, 3), stim2_begin:stim2_end, 1] = 1
+    labels = ['A-A', 'A-B', 'B-A', 'B-B']
+    colors = ['orange', 'red', 'cyan', 'orchid']
+
+    output = net.forward(input)
+    output = output.squeeze().detach().numpy()
+    for i in range(4):
+        plt.plot(output[i], c=colors[i], label=labels[i])
+    plt.legend()
 
 
 def psychometric_matrix(net, n_trials=10, ax=None):

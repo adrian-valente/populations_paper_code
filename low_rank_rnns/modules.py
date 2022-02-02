@@ -1,8 +1,14 @@
+"""
+MAIN FILE
+
+Definition of network classes, training functionality.
+"""
+
+from low_rank_rnns.helpers import *
 import torch.nn as nn
 from math import sqrt, floor
 import random
 import time
-from low_rank_rnns.helpers import *
 
 
 def loss_mse(output, target, mask):
@@ -20,8 +26,15 @@ def loss_mse(output, target, mask):
     return loss_by_trial.mean()
 
 
+def accuracy_general(output, targets, mask):
+    good_trials = (targets != 0).any(dim=1).squeeze()
+    target_decisions = torch.sign((targets[good_trials, :, :] * mask[good_trials, :, :]).mean(dim=1).squeeze())
+    decisions = torch.sign((output[good_trials, :, :] * mask[good_trials, :, :]).mean(dim=1).squeeze())
+    return (target_decisions == decisions).type(torch.float32).mean()
+
+
 def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_learning_curve=False, plot_gradient=False,
-          mask_gradients=False,clip_gradient=None, keep_best=False, cuda=False, resample=False):
+          mask_gradients=False, clip_gradient=None, early_stop=None, keep_best=False, cuda=False, resample=False):
     """
     Train a network
     :param net: nn.Module
@@ -33,7 +46,9 @@ def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_le
     :param batch_size: int
     :param plot_learning_curve: bool
     :param plot_gradient: bool
+    :param mask_gradients: bool, set to True if training the SupportLowRankRNN_withMask for reduced models
     :param clip_gradient: None or float, if not None the value at which gradient norm is clipped
+    :param early_stop: None or float, set to target loss value after which to immediately stop if attained
     :param keep_best: bool, if True, model with lower loss from training process will be kept (for this option, the
         network has to implement a method clone())
     :param resample: for SupportLowRankRNNs, set True
@@ -45,7 +60,7 @@ def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_le
     all_losses = []
     if plot_gradient:
         gradient_norms = []
-    
+
     # CUDA management
     if cuda:
         if not torch.cuda.is_available():
@@ -60,6 +75,7 @@ def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_le
     target = _target.to(device=device)
     mask = _mask.to(device=device)
 
+    # Initialize setup to keep best network
     with torch.no_grad():
         initial_loss = loss_mse(net(input), target, mask)
         print("initial loss: %.3f" % (initial_loss.item()))
@@ -67,9 +83,10 @@ def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_le
             best = net.clone()
             best_loss = initial_loss.item()
 
+    # Training loop
     for epoch in range(n_epochs):
         begin = time.time()
-        losses = []
+        losses = []  # losses over the whole epoch
         for i in range(num_examples // batch_size):
             optimizer.zero_grad()
             random_batch_idx = random.sample(range(num_examples), batch_size)
@@ -79,14 +96,14 @@ def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_le
             losses.append(loss.item())
             all_losses.append(loss.item())
             loss.backward()
-            if mask_gradients:  
-                net.m.grad = net.m.grad*net.m_mask
-                net.n.grad = net.n.grad*net.n_mask
-                net.wi.grad = net.wi.grad*net.wi_mask
-                net.wo.grad = net.wo.grad*net.wo_mask
-                net.unitn.grad = net.unitn.grad*net.unitn_mask
-                net.unitm.grad = net.unitm.grad*net.unitm_mask
-                net.unitwi.grad = net.unitwi.grad*net.unitwi_mask            
+            if mask_gradients:
+                net.m.grad = net.m.grad * net.m_mask
+                net.n.grad = net.n.grad * net.n_mask
+                net.wi.grad = net.wi.grad * net.wi_mask
+                net.wo.grad = net.wo.grad * net.wo_mask
+                net.unitn.grad = net.unitn.grad * net.unitn_mask
+                net.unitm.grad = net.unitm.grad * net.unitm_mask
+                net.unitwi.grad = net.unitwi.grad * net.unitwi_mask
             if clip_gradient is not None:
                 torch.nn.utils.clip_grad_norm_(net.parameters(), clip_gradient)
             if plot_gradient:
@@ -106,6 +123,8 @@ def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_le
             print("epoch %d:  loss=%.3f  (took %.2f s) *" % (epoch, np.mean(losses), time.time() - begin))
         else:
             print("epoch %d:  loss=%.3f  (took %.2f s)" % (epoch, np.mean(losses), time.time() - begin))
+        if early_stop is not None and np.mean(losses) < early_stop:
+            break
 
     if plot_learning_curve:
         plt.plot(all_losses)
@@ -376,8 +395,8 @@ class LowRankRNN(nn.Module):
         # simulation loop
         for i in range(seq_len):
             h = h + self.noise_std * noise[:, i, :] + self.alpha * (
-                        -h + r.matmul(self.n).matmul(self.m.t()) / self.hidden_size +
-                        input[:, i, :].matmul(self.wi_full))
+                    -h + r.matmul(self.n).matmul(self.m.t()) / self.hidden_size +
+                    input[:, i, :].matmul(self.wi_full))
             r = self.non_linearity(h)
             output[:, i, :] = r.matmul(self.wo_full) / self.hidden_size
             if return_dynamics:
@@ -390,7 +409,7 @@ class LowRankRNN(nn.Module):
 
     def clone(self):
         new_net = LowRankRNN(self.input_size, self.hidden_size, self.output_size, self.noise_std, self.alpha,
-                             0., self.rank, self.train_wi, self.train_wo, self.train_wrec, self.train_h0, self.train_si,
+                             self.rank, self.train_wi, self.train_wo, self.train_wrec, self.train_h0, self.train_si,
                              self.train_so, self.wi, self.wo, self.m, self.n, self.si, self.so)
         new_net._define_proxy_parameters()
         return new_net
@@ -526,7 +545,7 @@ class SupportLowRankRNN(nn.Module):
 
     def _define_proxy_parameters(self):
         self.wi = torch.sum((self.wi_weights @ self.gaussian_basis) * self.supports, dim=(1,)) + \
-            self.wi_biases @ self.supports
+                  self.wi_biases @ self.supports
         self.wi_full = self.wi
         self.m = torch.sum((self.m_weights @ self.gaussian_basis) * self.supports, dim=(1,)).t() + \
                  (self.m_biases @ self.supports).t()
@@ -567,7 +586,7 @@ class SupportLowRankRNN(nn.Module):
                                     self.m_weights, self.n_weights, self.wi_weights, self.wo_weights, self.m_biases,
                                     self.n_biases, self.wi_biases)
         new_net.gaussian_basis.copy_(self.gaussian_basis)
-        new_net.define_proxy_parameters()
+        new_net._define_proxy_parameters()
         return new_net
 
     def load_state_dict(self, state_dict, strict=True):
@@ -585,7 +604,7 @@ class SupportLowRankRNN(nn.Module):
 class SupportLowRankRNN_withMask(nn.Module):
     """
     This network has been defined to train an arbitrary subset of the parameters offered by the SupportLowRankRNN
-    by adding a mask
+    by adding a mask.
     """
 
     def __init__(self, input_size, hidden_size, output_size, noise_std, alpha, rank=1, n_supports=1,
@@ -799,3 +818,173 @@ class SupportLowRankRNN_withMask(nn.Module):
         self.define_proxy_parameters()
 
 
+class OptimizedLowRankRNN(nn.Module):
+    """
+    LowRankRNN class with a different definition of scalings (see caption of SI Fig. about the 3-population Ctx net)
+    """
+
+    def __init__(self, input_size, hidden_size, output_size, noise_std, alpha, rho=0., rank=1,
+                 train_wi=False, train_wo=False, train_wrec=True, train_h0=False, train_si=True, train_so=True,
+                 wi_init=None, wo_init=None, m_init=None, n_init=None, si_init=None, so_init=None, h0_init=None):
+        """
+        :param input_size: int
+        :param hidden_size: int
+        :param output_size: int
+        :param noise_std: float
+        :param alpha: float
+        :param rho: float, std of quenched noise matrix
+        :param rank: int
+        :param train_wi: bool
+        :param train_wo: bool
+        :param train_wrec: bool
+        :param train_h0: bool
+        :param train_si: bool (can't be True if train_wi is already True)
+        :param train_so: bool (can't be True if train_wo is already True)
+        :param wi_init: torch tensor of shape (input_dim, hidden_size)
+        :param wo_init: torch tensor of shape (hidden_size, output_dim)
+        :param m_init: torch tensor of shape (hidden_size, rank)
+        :param n_init: torch tensor of shape (hidden_size, rank)
+        :param si_init: input scaling, torch tensor of shape (input_dim)
+        :param so_init: output scaling, torch tensor of shape (output_dim)
+        :param h0_init: torch tensor of shape (hidden_size)
+        """
+        super(OptimizedLowRankRNN, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.noise_std = noise_std
+        self.alpha = alpha
+        self.rho = rho
+        self.rank = rank
+        self.train_wi = train_wi
+        self.train_wo = train_wo
+        self.train_wrec = train_wrec
+        self.train_h0 = train_h0
+        self.train_si = train_si
+        self.train_so = train_so
+        self.non_linearity = torch.tanh
+
+        # Define parameters
+        self.wi = nn.Parameter(torch.Tensor(input_size, hidden_size))
+        self.si = nn.Parameter(torch.Tensor(input_size))
+        if train_wi:
+            self.si.requires_grad = False
+        else:
+            self.wi.requires_grad = False
+        if not train_si:
+            self.si.requires_grad = False
+        self.m = nn.Parameter(torch.Tensor(hidden_size, rank))
+        self.n = nn.Parameter(torch.Tensor(hidden_size, rank))
+        if not train_wrec:
+            self.m.requires_grad = False
+            self.n.requires_grad = False
+        self.wo = nn.Parameter(torch.Tensor(hidden_size, output_size))
+        self.so = nn.Parameter(torch.Tensor(output_size))
+        if train_wo:
+            self.so.requires_grad = False
+        else:
+            self.wo.requires_grad = False
+        if not train_so:
+            self.so.requires_grad = False
+        self.h0 = nn.Parameter(torch.Tensor(hidden_size))
+        if not train_h0:
+            self.h0.requires_grad = False
+
+        # Initialize parameters
+        with torch.no_grad():
+            if wi_init is None:
+                self.wi.normal_()
+            else:
+                self.wi.copy_(wi_init)
+            if si_init is None:
+                self.si.set_(torch.ones_like(self.si))
+            else:
+                self.si.copy_(si_init)
+            if m_init is None:
+                self.m.normal_(std=1 / sqrt(hidden_size))
+            else:
+                self.m.copy_(m_init)
+            if n_init is None:
+                self.n.normal_(std=1 / sqrt(hidden_size))
+            else:
+                self.n.copy_(n_init)
+            if wo_init is None:
+                self.wo.normal_(std=2 / hidden_size)
+            else:
+                self.wo.copy_(wo_init)
+            if so_init is None:
+                self.so.set_(torch.ones_like(self.so))
+            else:
+                self.so.copy_(so_init)
+            if h0_init is None:
+                self.h0.zero_()
+            else:
+                self.h0.copy_(h0_init)
+        self.wrec, self.wi_full, self.wo_full = [None] * 3
+        self.define_proxy_parameters()
+
+    def define_proxy_parameters(self):
+        self.wi_full = (self.wi.t() * self.si).t()
+        self.wo_full = self.wo * self.so
+
+    def forward(self, input, return_dynamics=False):
+        """
+        :param input: tensor of shape (batch_size, #timesteps, input_dimension)
+        Important: the 3 dimensions need to be present, even if they are of size 1.
+        :param return_dynamics: boolean
+        :return: if return_dynamics=False, output tensor of shape (batch_size, #timesteps, output_dimension)
+                 if return_dynamics=True, (output tensor, trajectories tensor of shape (batch_size, #timesteps, #hidden_units))
+        """
+        batch_size = input.shape[0]
+        seq_len = input.shape[1]
+        h = self.h0
+        r = self.non_linearity(h)
+        self.define_proxy_parameters()
+        noise = torch.randn(batch_size, seq_len, self.hidden_size, device=self.m.device)
+        output = torch.zeros(batch_size, seq_len, self.output_size, device=self.m.device)
+        if return_dynamics:
+            trajectories = torch.zeros(batch_size, seq_len+1, self.hidden_size, device=self.m.device)
+            trajectories[:, 0, :] = h
+
+        # simulation loop
+        for i in range(seq_len):
+            h = h + self.noise_std * noise[:, i, :] + self.alpha * (-h + r.matmul(self.n).matmul(self.m.t()) +
+                                                                    input[:, i, :].matmul(self.wi_full))
+            r = self.non_linearity(h)
+            output[:, i, :] = r.matmul(self.wo_full)
+            if return_dynamics:
+                trajectories[:, i+1, :] = h
+
+        if not return_dynamics:
+            return output
+        else:
+            return output, trajectories
+
+    def clone(self):
+        new_net = OptimizedLowRankRNN(self.input_size, self.hidden_size, self.output_size, self.noise_std, self.alpha,
+                             self.rho, self.rank, self.train_wi, self.train_wo, self.train_wrec, self.train_h0,
+                             self.train_si, self.train_so, self.wi, self.wo, self.m, self.n, self.si, self.so)
+        new_net.define_proxy_parameters()
+        return new_net
+
+    def resample_connectivity_noise(self):
+        self.define_proxy_parameters()
+
+    def load_state_dict(self, state_dict, strict=True):
+        """
+        override to recompute w_rec on loading
+        """
+        super().load_state_dict(state_dict, strict)
+        self.define_proxy_parameters()
+
+    def svd_reparametrization(self):
+        """
+        Orthogonalize m and n via SVD
+        """
+        with torch.no_grad():
+            structure = (self.m @ self.n.t()).numpy()
+            m, s, n = np.linalg.svd(structure, full_matrices=False)
+            m, s, n = m[:, :self.rank], s[:self.rank], n[:self.rank, :]
+            self.m.set_(torch.from_numpy(m * np.sqrt(s)))
+            self.n.set_(torch.from_numpy(n.transpose() * np.sqrt(s)))
+            self.define_proxy_parameters()

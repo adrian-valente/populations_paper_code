@@ -9,9 +9,10 @@ from low_rank_rnns.helpers import map_device
 deltaT = 20.
 fixation_duration = 100
 stimulus_duration = 800
-delay_duration = 300
-decision_duration = 300
-SCALE = 3.2
+delay_duration = 100
+decision_duration = 20
+SCALE = 1e-1
+std_default = 1e-1
 # decision targets
 lo = -1
 hi = 1
@@ -39,9 +40,9 @@ def setup():
 setup()
 
 
-def generate_rdm_data(num_trials, coherences=None, std=3e-2, fraction_validation_trials=.2, fraction_catch_trials=0.):
+def generate_rdm_data(num_trials, coherences=None, std=std_default, fraction_validation_trials=.2, fraction_catch_trials=0.):
     if coherences is None:
-        coherences = [-16, -8, -4, -2, -1, 1, 2, 4, 8, 16]
+        coherences = [-4, -2, -1, 1, 2, 4]
 
     inputs = std * torch.randn((num_trials, total_duration, 1), dtype=torch.float32)
     targets = torch.zeros((num_trials, total_duration, 1), dtype=torch.float32)
@@ -50,7 +51,7 @@ def generate_rdm_data(num_trials, coherences=None, std=3e-2, fraction_validation
     for i in range(num_trials):
         if np.random.rand() > fraction_catch_trials:
             coh_current = coherences[int(np.random.rand() * len(coherences))]
-            inputs[i, fixation_duration_discrete:stimulus_end, 0] += coh_current * SCALE / 100
+            inputs[i, fixation_duration_discrete:stimulus_end, 0] += coh_current * SCALE
             targets[i, response_begin:, 0] = hi if coh_current > 0 else lo
         mask[i, response_begin:, 0] = 1
 

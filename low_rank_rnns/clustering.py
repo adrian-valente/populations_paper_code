@@ -10,16 +10,70 @@ from sklearn.metrics import adjusted_rand_score
 from sklearn.neighbors import NearestNeighbors
 import matplotlib.pyplot as plt
 from low_rank_rnns.modules import SupportLowRankRNN
-from low_rank_rnns.helpers import center_axes, gram_factorization
+from low_rank_rnns.helpers import center_axes
+
+
+def phi_prime(x):
+    return 1 - np.tanh(x)**2
+
+
+def hard_thresh_linreg(vec1, vec2, inp, thresh=.5, label1='', label2=''):
+    """
+    plot a scatter of (vec1, vec2) points, separated in 2 populations according to the threshold inp > thresh,
+    with linear regressions
+    :param vec1: array of shape n
+    :param vec2: array of shape n
+    :param inp: array of shape n
+    :param thresh: float
+    :param label1: label for x axis
+    :param label2: label for y axis
+    :return:
+    """
+    idx1 = phi_prime(inp) < thresh
+    idx2 = phi_prime(inp) > thresh
+
+    plt.scatter(vec1[idx1], vec2[idx1], c='orange', label='saturated')
+    plt.scatter(vec1[idx2], vec2[idx2], c='green', label='non saturated')
+
+    xmin, xmax = vec1.min(), vec1.max()
+
+    slope, intercept, r_value, p_value, std_err = stats.linregress(vec1[idx2],
+                                                                   vec2[idx2])
+    print("slope: %f    intercept: %f" % (slope, intercept))
+    print("r-squared: %f" % (r_value ** 2))
+    print("p-value: %f" % p_value)
+    xs = np.linspace(xmin, xmax, 100)
+    plt.plot(xs, slope * xs + intercept, color='green')
+
+    slope2, intercept2, r_value2, p_value2, std_err2 = stats.linregress(vec1[idx1],
+                                                                        vec2[idx1])
+    print("slope: %f    intercept: %f" % (slope2, intercept2))
+    print("r-squared: %f" % (r_value2 ** 2))
+    print("p-value: %f" % p_value2)
+    xs = np.linspace(xmin, xmax, 100)
+    plt.plot(xs, slope2 * xs + intercept2, color='orange')
+    plt.legend()
+
+    slope, intercept, r_value, p_value, std_err = stats.linregress(vec1, vec2)
+    print("slope: %f    intercept: %f" % (slope, intercept))
+    print("r-squared: %f" % (r_value ** 2))
+    print("p-value: %f" % p_value)
+    xs = np.linspace(xmin, xmax, 100)
+    plt.plot(xs, slope * xs + intercept, color='b')
+    plt.xlabel(label1)
+    plt.ylabel(label2)
+    plt.show()
+
+    return idx1, idx2
 
 
 def gmm_fit(neurons_fs, n_components, algo='bayes', n_init=50, random_state=None, mean_precision_prior=None,
             weight_concentration_prior_type='dirichlet_process', weight_concentration_prior=None):
     """
-    Fit a mixture of gaussians to a cloud of n points
+    fit a mixture of gaussians to a set of vectors
     :param neurons_fs: list of numpy arrays of shape n or numpy array of shape n x d
     :param n_components: int
-    :param algo: 'em' (expectation-maximization) or 'bayes'
+    :param algo: 'em' or 'bayes'
     :param n_init: number of random seeds for the inference algorithm
     :param random_state: random seed for the rng to eliminate randomness
     :return: vector of population labels (of shape n), best fitted model
@@ -50,15 +104,18 @@ def make_vecs(net):
            [net.wo[:, i].cpu().detach().numpy() for i in range(net.output_size)]
 
 
+def gram_factorization(G):
+    """
+    The rows of the returned matrix are the basis vectors whose Gramian matrix is G
+    :param G: ndarray representing a symmetric semidefinite positive matrix
+    :return: ndarray
+    """
+    w, v = np.linalg.eigh(G)
+    x = v * np.sqrt(w)
+    return x
+
+
 def to_support_net(net, z, new_size=None, take_means=False):
-    """
-    Generate a SupportLowRankRNN from a LowRankRNN, with populations defined by z
-    :param net: LowRankRNN
-    :param z: numpy array of size n whose entries are integer labels for populations
-    :param new_size: int
-    :param take_means: bool, whether to take into account means of components or set them to zero
-    :return: the SupportLowRankRNN
-    """
     X = np.vstack(make_vecs(net)).transpose()
     _, counts = np.unique(z, return_counts=True)
     n_components = counts.shape[0]
@@ -100,8 +157,86 @@ def to_support_net(net, z, new_size=None, take_means=False):
     return net2
 
 
-def pop_scatter_linreg(vec1, vec2, pops, n_pops=None, colors=('blue', 'red', 'green', 'gray'),
-                       linreg=True, figsize=(5, 5), ax=None):
+def to_support_net_scalings(net, z, new_size=None, take_means=False):
+    X = np.vstack(make_vecs(net)).transpose()
+    _, counts = np.unique(z, return_counts=True)
+    n_components = counts.shape[0]
+    weights = counts / net.hidden_size
+    if take_means:
+        means = np.vstack([X[z == i].mean(axis=0) for i in range(n_components)])
+    else:
+        means = np.zeros((n_components, X.shape[1]))
+    covariances = [np.cov(X[z == i].transpose()) for i in range(n_components)]
+
+    rank = net.rank
+    basis_dim = 2 * rank + net.input_size + net.output_size
+    m_init = torch.zeros(rank, n_components, basis_dim)
+    n_init = torch.zeros(rank, n_components, basis_dim)
+    wi_init = torch.zeros(net.input_size, n_components, basis_dim)
+    wo_init = torch.zeros(net.output_size, n_components, basis_dim)
+
+    if new_size is None:
+        new_size = net.hidden_size
+    old_size = net.hidden_size
+    m_means = torch.from_numpy(means[:, :rank]).t() * sqrt(old_size) / sqrt(new_size)
+    n_means = torch.from_numpy(means[:, rank: 2*rank]).t() * sqrt(old_size) / sqrt(new_size)
+    wi_means = torch.from_numpy(means[:, 2*rank: 2*rank + net.input_size]).t()
+
+    for i in range(n_components):
+        # Compute Gramian matrix of the basis we have to build
+        G = covariances[i]
+        X_reduced = gram_factorization(G)
+        for k in range(rank):
+            m_init[k, i] = torch.from_numpy(X_reduced[k]) * sqrt(old_size) / sqrt(new_size)
+            n_init[k, i] = torch.from_numpy(X_reduced[rank + k]) * sqrt(old_size) / sqrt(new_size)
+        for k in range(net.input_size):
+            wi_init[k, i] = torch.from_numpy(X_reduced[2 * rank + k])
+        for k in range(net.output_size):
+            wo_init[k, i] = torch.from_numpy(X_reduced[2 * rank + net.input_size + k]) * old_size / new_size
+
+    net2 = SupportLowRankRNN(net.input_size, new_size, net.output_size, net.noise_std, net.alpha, rank, n_components,
+                             weights, basis_dim, m_init, n_init, wi_init, wo_init, m_means, n_means, wi_means)
+    return net2
+
+
+def to_support_net_old(net, n_components=1, new_size=None):
+    vecs = make_vecs(net)
+    z, model = gmm_fit(vecs, n_components)
+    weights = model.weights_
+
+    rank = net.rank
+    basis_dim = 2 * rank + net.input_size + net.output_size
+    m_init = torch.zeros(rank, n_components, basis_dim)
+    n_init = torch.zeros(rank, n_components, basis_dim)
+    wi_init = torch.zeros(net.input_size, n_components, basis_dim)
+    wo_init = torch.zeros(net.output_size, n_components, basis_dim)
+
+    if new_size is None:
+        new_size = net.hidden_size
+    old_size = net.hidden_size
+    m_means = torch.from_numpy(model.means_[:, :rank]).t() * sqrt(old_size) / sqrt(new_size)
+    n_means = torch.from_numpy(model.means_[:, rank: 2*rank]).t() * sqrt(old_size) / sqrt(new_size)
+    wi_means = torch.from_numpy(model.means_[:, 2*rank: 2*rank + net.input_size]).t()
+
+    for i in range(n_components):
+        # Compute Gramian matrix of the basis we have to build
+        G = model.covariances_[i]
+        X_reduced = gram_factorization(G)
+        for k in range(rank):
+            m_init[k, i] = torch.from_numpy(X_reduced[k]) * sqrt(old_size) / sqrt(new_size)
+            n_init[k, i] = torch.from_numpy(X_reduced[rank + k]) * sqrt(old_size) / sqrt(new_size)
+        for k in range(net.input_size):
+            wi_init[k, i] = torch.from_numpy(X_reduced[2 * rank + k])
+        for k in range(net.output_size):
+            wo_init[k, i] = torch.from_numpy(X_reduced[2 * rank + net.input_size + k]) * old_size / new_size
+
+    net2 = SupportLowRankRNN(net.input_size, new_size, net.output_size, net.noise_std, net.alpha, rank, n_components,
+                             weights, basis_dim, m_init, n_init, wi_init, wo_init, m_means, n_means, wi_means)
+    return net2
+
+
+def pop_scatter_linreg(vec1, vec2, pops, n_pops=None, linreg=True, colors=('blue', 'green', 'red', 'violet', 'gray'),
+                       figsize=(5, 5), size=10., ax=None):
     """
     scatter plot of (vec1, vec2) points separated in populations according to int labels in vector pops, with linear
     regressions
@@ -122,13 +257,31 @@ def pop_scatter_linreg(vec1, vec2, pops, n_pops=None, colors=('blue', 'red', 'gr
     if n_pops is None:
         n_pops = np.unique(pops).shape[0]
     for i in range(n_pops):
-        ax.scatter(vec1[pops == i], vec2[pops == i], color=colors[i], s=.5)
+        ax.scatter(vec1[pops == i], vec2[pops == i], color=colors[i], s=size)
         if linreg:
             slope, intercept, r_value, p_value, std_err = stats.linregress(vec1[pops == i], vec2[pops == i])
             print(f"pop {i}: slope={slope:.2f}, intercept={intercept:.2f}")
             ax.plot(xs, slope * xs + intercept, color=colors[i], zorder=-1)
     ax.set_xticks([])
     ax.set_yticks([])
+
+
+def all_scatter_linreg(vecs, pops, xlabel='', ylabel='', n_pops=None, linreg=False,
+                       colors=('blue', 'green', 'red', 'violet', 'gray')):
+    fig, ax = plt.subplots(len(vecs),len(vecs),figsize=(6, 8))
+    if n_pops is None:
+        n_pops = np.unique(pops).shape[0]
+    for k in range(len(vecs)):
+        for l in range(len(vecs)):
+            if k is not l:
+                for i in range(n_pops):
+                    ax[k,l].scatter(vecs[k][pops == i], vecs[l][pops == i], color=colors[i])
+                    if linreg:
+                        slope, intercept, r_value, p_value, std_err = stats.linregress(vec1[pops == i], vec2[pops == i])
+                        print(f"pop {i}: slope={slope:.2f}, intercept={intercept:.2f}")
+                        plt.plot(xs, slope * xs + intercept, color=colors[i])
+    
+    return ax
 
 
 ### Spectral clustering and stability analysis
@@ -167,7 +320,6 @@ def clustering_stability_task(neurons_fs, algo, n_clusters, metric, n_neighbors,
 def clustering_stability(neurons_fs, n_clusters, n_bootstrap, algo='gmm', metric='cosine', n_neighbors=10,
                          mean_precision_prior=1e5, normalize=None):
     """
-    Compute clustering stability distribution for a particular number of clusters and algorithm
     :param neurons_fs: numpy array of shape Nxd (neurons embedded in some feature space)
     :param n_clusters: int
     :param n_bootstrap: int
@@ -218,17 +370,6 @@ def clustering_stability(neurons_fs, n_clusters, n_bootstrap, algo='gmm', metric
 
 def boxplot_clustering_stability(neurons_fs, clusters_nums, aris=None, algo='gmm', n_bootstrap=20, metric='cosine',
                                  n_neighbors=10, ax=None):
-    """
-    :param neurons_fs: numpy array of shape Nxd (neurons embedded in some feature space)
-    :param clusters_nums: list of ints
-    :param aris: if precomputed aris, list of lists with ari distributions
-    :param algo: 'spectral' or 'gmm'
-    :param n_bootstrap: int
-    :param metric: 'euclidean' or 'cosine' for spectral clustering
-    :param n_neighbors: int, for spectral clustering
-    :param ax: matplotlib axes if already setup
-    :return: axes
-    """
     if aris is None:
         aris = [clustering_stability(neurons_fs, k, n_bootstrap, algo, metric, n_neighbors) for k in clusters_nums]
     aris = np.array(aris)

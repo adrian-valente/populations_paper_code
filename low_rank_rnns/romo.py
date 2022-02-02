@@ -1,5 +1,4 @@
 from math import floor
-import torch
 import random
 from low_rank_rnns.helpers import *
 from low_rank_rnns.modules import loss_mse
@@ -8,13 +7,14 @@ deltaT = 20.
 fixation_duration = 100
 stimulus1_duration = 100
 delay_duration_min = 500
-delay_duration_max = 2000
+delay_duration_max = 1000
 stimulus2_duration = 100
 decision_duration = 100
 
 fdiffs_global = [-24, -16, -8, 8, 16, 24]
 fpairs_global = [(base, base + fdiff) for fdiff in fdiffs_global
                                       for base in range(max(10 - fdiff, 10), min(34, 34 - fdiff) + 1)]
+# fpairs_global = [(10, 34), ()]
 fmax = max([max(*p) for p in fpairs_global])
 fmin = min([min(*p) for p in fpairs_global])
 fmiddle = (fmax + fmin) / 2.
@@ -71,16 +71,34 @@ def generate_data(num_trials, std=1e-2, fpairs=None, fraction_validation_trials=
             targets[i, stim2_end:decision_end] = (f1 - f2) / fspan
             mask[i, stim2_end:decision_end] = 1
 
-  
-    
     # Split
     split_at = num_trials - int(num_trials * fraction_validation_trials)
     inputs_train, inputs_val = inputs[:split_at], inputs[split_at:]
     targets_train, targets_val = targets[:split_at], targets[split_at:]
     mask_train, mask_val = mask[:split_at], mask[split_at:]
 
-
     return inputs_train, targets_train, mask_train, inputs_val, targets_val, mask_val
+
+
+def data_for_regr(num_trials, std=1e-2, delay_duration=floor(500/deltaT)):
+    inputs = std * torch.randn((num_trials, total_duration, 1))
+    f1s = []
+    f2s = []
+    fpairs = fpairs_global
+
+    for i in range(num_trials):
+        # Sample frequencies
+        fpair = random.choice(fpairs)
+        f1 = fpair[0]
+        f2 = fpair[1]
+        stim2_begin = stim1_end + delay_duration
+        stim2_end = stim2_begin + stimulus2_duration_discrete
+        inputs[i, fixation_duration_discrete:stim1_end] += (f1 - fmiddle) / fspan
+        inputs[i, stim2_begin:stim2_end] += (f2 - fmiddle) / fspan
+        f1s.append(f1)
+        f2s.append(f2)
+
+    return inputs, f1s, f2s
 
 
 def accuracy_romo(output, targets, mask):
