@@ -15,7 +15,7 @@ def loss_mse(output, target, mask):
     """
     Mean squared error loss
     :param output: torch tensor of shape (num_trials, num_timesteps, output_dim)
-    :param target: idem
+    :param target: torch tensor of shape (num_trials, num_timesteps, output_dim)
     :param mask: torch tensor of shape (num_trials, num_timesteps, 1)
     :return: float
     """
@@ -26,11 +26,11 @@ def loss_mse(output, target, mask):
     return loss_by_trial.mean()
 
 
-def accuracy_general(output, targets, mask):
-    good_trials = (targets != 0).any(dim=1).squeeze()
-    target_decisions = torch.sign((targets[good_trials, :, :] * mask[good_trials, :, :]).mean(dim=1).squeeze())
-    decisions = torch.sign((output[good_trials, :, :] * mask[good_trials, :, :]).mean(dim=1).squeeze())
-    return (target_decisions == decisions).type(torch.float32).mean()
+# def accuracy_general(output, targets, mask):
+#     good_trials = (targets != 0).any(dim=1).squeeze()
+#     target_decisions = torch.sign((targets[good_trials, :, :] * mask[good_trials, :, :]).mean(dim=1).squeeze())
+#     decisions = torch.sign((output[good_trials, :, :] * mask[good_trials, :, :]).mean(dim=1).squeeze())
+#     return (target_decisions == decisions).type(torch.float32).mean()
 
 
 def train(net, _input, _target, _mask, n_epochs, lr=1e-2, batch_size=32, plot_learning_curve=False, plot_gradient=False,

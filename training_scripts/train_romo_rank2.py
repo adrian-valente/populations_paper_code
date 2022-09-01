@@ -1,5 +1,5 @@
 """
-Trains on Romo with some shaping
+Trains on WM task with some shaping
 """
 
 import sys

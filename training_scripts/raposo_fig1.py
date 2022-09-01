@@ -1,3 +1,7 @@
+"""
+Train 100 low-rank networks on the MDM task and make diverse analyses (epairs, truncations, resampling)
+"""
+
 import sys
 sys.path.append('../')
 

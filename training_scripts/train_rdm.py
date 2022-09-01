@@ -1,5 +1,5 @@
 """
-Modified on 11/01
+Train rank-one network on the RDM task
 """
 
 import sys

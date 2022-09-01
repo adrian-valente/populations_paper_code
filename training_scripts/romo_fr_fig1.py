@@ -1,3 +1,7 @@
+"""
+Train 100 full-rank networks on the working mem task and make diverse analyses (epairs, truncations, resampling)
+"""
+
 import sys
 sys.path.append('../')
 

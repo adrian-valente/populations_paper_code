@@ -1,3 +1,7 @@
+"""
+Train 100 full-rank RDM networks and make diverse analyses (epairs, truncations, resampling)
+"""
+
 import sys
 sys.path = [sys.path[-1]] + sys.path[:-1]
 sys.path.append('../')

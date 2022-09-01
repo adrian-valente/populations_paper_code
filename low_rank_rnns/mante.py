@@ -106,6 +106,25 @@ def generate_mante_data(num_trials, coherences=None, std=std_default, fraction_v
         return inputs_train, targets_train, mask_train
 
 
+def generate_specified_input(coh1, coh2, ctx, n_trials, std=std_default):
+    """
+    Generate a series of trials with identical propoerties
+    :param coh1: float
+    :param coh2: float
+    :param ctx: int, 1 or 2
+    :param n_trials: int
+    :param std: float
+    :return: ndarray (n_trials x n_timesteps x 4)
+    """
+    input_sensory = std * torch.randn((n_trials, total_duration, 2), dtype=torch.float32)
+    input_context = torch.zeros((n_trials, total_duration, 2))
+    inputs = torch.cat([input_sensory, input_context], dim=2)
+    inputs[:, stim_begin:stim_end, 0] += coh1 * SCALE
+    inputs[:, stim_begin:stim_end, 1] += coh2 * SCALE
+    inputs[:, fixation_duration_discrete:response_begin, 1+ctx] = 1. * SCALE_CTX
+    return inputs
+
+
 def generate_ordered_inputs(n_repet=10):
     n_trials = n_repet * 2 * 2 * 2
     i = 0
@@ -166,12 +185,7 @@ def psychometric_matrices(net, cmap='gray', figsize=None, axes=None):
         mat = np.zeros((len(coherences), len(coherences)))
         for i, coh1 in enumerate(coherences):
             for j, coh2 in enumerate(coherences):
-                inputs_sensory = std_default * torch.randn((n_trials, total_duration, 2), dtype=torch.float32)
-                inputs_context = torch.zeros((n_trials, total_duration, 2))
-                inputs = torch.cat([inputs_sensory, inputs_context], dim=2)
-                inputs[:, stim_begin:stim_end, 0] += coh1 * SCALE
-                inputs[:, stim_begin:stim_end, 1] += coh2 * SCALE
-                inputs[:, fixation_duration_discrete:response_begin, 2+ctx] = 1. * SCALE_CTX
+                inputs = generate_specified_input(coh1, coh2, ctx+1, n_trials)
                 output = net.forward(inputs)
                 decisions = torch.sign(output[:, response_begin:, :].mean(dim=1).squeeze())
                 mat[len(coherences) - j - 1, i] = decisions.mean().item()
@@ -181,6 +195,84 @@ def psychometric_matrices(net, cmap='gray', figsize=None, axes=None):
         axes[ctx].spines['top'].set_visible(True)
         axes[ctx].spines['right'].set_visible(True)
     return axes
+
+
+def inactivating_pop_matrices(net, frac, z, n_samples=10, cmap='gray', figsize=None):
+    """
+    Inactivate some neurons and trace psychometric matrices, compute switching performance
+    :param net: nn.Module
+    :param frac: float, fraction of neurons to inactive in the considered population
+    :param z:
+    :param n_samples:
+    :param cmap:
+    :param figsize:
+    :return:
+    """
+    target_idxes = np.where(z)[0]
+    N_ablated = int(frac*len(target_idxes))
+    coherences = np.arange(-5, 6, 2)
+    mat = np.zeros((2, n_samples, len(coherences), len(coherences)))
+    fraction_correct_1_vec = np.zeros((n_samples, 1))
+    fraction_correct_2_vec = np.zeros((n_samples, 1))
+
+    for q in range(n_samples):
+        if frac == 1:
+            ablated = target_idxes
+        else:
+            ablated = target_idxes[random.sample(range(len(target_idxes)), N_ablated)]
+
+        net_ablated_pop1 = net.clone()
+        with torch.no_grad():
+            net_ablated_pop1.n[ablated, :] = 0
+            net_ablated_pop1.m[ablated, :] = 0
+            net_ablated_pop1.wo[ablated, :] = 0
+
+        n_trials = 10
+        fraction_correct_ctx1 = 0
+        fraction_correct_ctx2 = 0
+        for ctx in (0, 1):
+            for i, coh1 in enumerate(coherences):
+                for j, coh2 in enumerate(coherences):
+                    inputs = generate_specified_input(coh1, coh2, ctx+1, n_trials)
+                    output = net_ablated_pop1.forward(inputs)
+                    decisions = torch.sign(output[:, response_begin:, :].mean(dim=1).squeeze())
+                    mean_decision = decisions.mean().item()
+                    mat[ctx, q, len(coherences) - j - 1, i] = mean_decision
+                    if ctx == 0:
+                        if coh1 < 0 and coh2 > 0:
+                            fraction_correct_ctx1 += 1-np.abs(-1 - mean_decision)/2.
+                        elif coh1 > 0 and coh2 < 0:
+                            fraction_correct_ctx1 += 1-np.abs(1 - mean_decision)/2.
+                    elif ctx == 1:
+                        if coh1<0 and coh2>0:
+                            fraction_correct_ctx2 += 1-np.abs(1 - mean_decision)/2.
+                        elif coh1>0 and coh2<0:
+                            fraction_correct_ctx2 += 1-np.abs(-1 - mean_decision)/2.
+
+        nb_conditions = len(coherences)**2 / 2.
+        fraction_correct_ctx1 /= nb_conditions
+        fraction_correct_ctx2 /= nb_conditions
+        fraction_correct_1_vec[q] = fraction_correct_ctx1
+        fraction_correct_2_vec[q] = fraction_correct_ctx2
+
+    # Plot the psychometric matrices
+    averaged_mat = np.mean(mat, axis=1)
+    if figsize is None:
+        figsize = matplotlib.rcParams['figure.figsize']
+    x, y = figsize
+    figsize = (2*x, y)
+    fig1, ax1 = plt.subplots(figsize=figsize)
+    fig2, ax2 = plt.subplots(figsize=figsize)
+    axes = [ax1, ax2]
+    mappable = axes[0].matshow(averaged_mat[0], cmap=cmap, vmin=-1, vmax=1)
+    axes[0].set_xticks([])
+    axes[0].set_yticks([])
+    mappable = axes[1].matshow(averaged_mat[1], cmap=cmap, vmin=-1, vmax=1)
+    axes[1].set_xticks([])
+    axes[1].set_yticks([])
+
+    return fig1, fig2, fraction_correct_1_vec, fraction_correct_2_vec
+
 
 #
 #
