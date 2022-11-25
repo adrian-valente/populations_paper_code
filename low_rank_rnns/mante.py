@@ -202,18 +202,20 @@ def inactivating_pop_matrices(net, frac, z, n_samples=10, cmap='gray', figsize=N
     Inactivate some neurons and trace psychometric matrices, compute switching performance
     :param net: nn.Module
     :param frac: float, fraction of neurons to inactive in the considered population
-    :param z:
-    :param n_samples:
-    :param cmap:
-    :param figsize:
-    :return:
+    :param z: ndarray of shape N (the number of neurons), with 1s indicating the considered population, 0s elsewhere
+    :param n_samples: Number of times the process of selecting random neurons will be performed
+    :param cmap: matplotlib colormap name
+    :param figsize: matplotlib figure size
+    :return: fig1, fig2, accs1, accs2 (the two mean psychometric matrix matplotlib.Figure objects, and two
+    arrays of shape (nsamples, 1) indicating the accuracies in resp. contexts 1 and 2, FOR INCONGRUENT TRIALS ONLY)
     """
     target_idxes = np.where(z)[0]
     N_ablated = int(frac*len(target_idxes))
     coherences = np.arange(-5, 6, 2)
     mat = np.zeros((2, n_samples, len(coherences), len(coherences)))
-    fraction_correct_1_vec = np.zeros((n_samples, 1))
-    fraction_correct_2_vec = np.zeros((n_samples, 1))
+    fraction_correct_1_vec = np.zeros(n_samples)
+    fraction_correct_2_vec = np.zeros(n_samples)
+    nb_conditions = len(coherences)**2 / 2.
 
     for q in range(n_samples):
         if frac == 1:
@@ -249,7 +251,6 @@ def inactivating_pop_matrices(net, frac, z, n_samples=10, cmap='gray', figsize=N
                         elif coh1>0 and coh2<0:
                             fraction_correct_ctx2 += 1-np.abs(-1 - mean_decision)/2.
 
-        nb_conditions = len(coherences)**2 / 2.
         fraction_correct_ctx1 /= nb_conditions
         fraction_correct_ctx2 /= nb_conditions
         fraction_correct_1_vec[q] = fraction_correct_ctx1
@@ -272,55 +273,3 @@ def inactivating_pop_matrices(net, frac, z, n_samples=10, cmap='gray', figsize=N
     axes[1].set_yticks([])
 
     return fig1, fig2, fraction_correct_1_vec, fraction_correct_2_vec
-
-
-#
-#
-# ### P modalities
-#
-# ctx_only_pre_duration = 350
-# ctx_only_pre_duration_discrete = int(ctx_only_pre_duration/deltaT)
-#
-# def generate_mante_pmod(P, num_trials, fraction_validation_trials):
-#     epochs = {}
-#     start_epoch0 = 0
-#     end_epoch0 = fixation_duration_discrete
-#     epochs[0] = [start_epoch0, end_epoch0]
-#     end_epoch1 = end_epoch0 + ctx_only_pre_duration_discrete
-#     epochs[1] = [end_epoch0, end_epoch1]
-#     end_epoch2 = end_epoch1 + stimulus_duration_discrete
-#     epochs[2] = [end_epoch1, end_epoch2]
-#     end_epoch3 = end_epoch2 + delay_duration_discrete
-#     epochs[3] = [end_epoch2, end_epoch3]
-#     end_epoch4 = end_epoch3 + decision_duration_discrete
-#     epochs[4] = [end_epoch3, end_epoch4]
-#     # parametrize input stimuli
-#     cohs = [-16, -8, -4, -2, -1, 1, 2, 4, 8, 16]
-#     inputs_evidence = std_default * torch.randn((num_trials, total_duration, P))
-#     inputs_context = torch.zeros((num_trials, total_duration, P))
-#     inputs = torch.cat([inputs_evidence, inputs_context], dim=2)
-#     targets = torch.zeros((num_trials, total_duration, 1))
-#     mask = torch.ones((num_trials, total_duration, 1))
-#     for i in range(num_trials):
-#         P0 = int(np.random.rand() * P)
-#         for j in range(P):
-#             coh = cohs[int(np.random.rand() * len(cohs))]
-#             inputs[i, end_epoch1:end_epoch2, j] += SCALE * coh
-#             if j == P0:
-#                 inputs[i, end_epoch0:end_epoch3, j + P] += 0
-#                 choice = int((1. + np.sign(coh)) / 2)
-#             else:
-#                 inputs[i, end_epoch0:end_epoch3, j + P] += 1
-#         if choice < 0.5:
-#             targets[i, end_epoch3 + 1:end_epoch4, 0] = lo
-#         else:
-#             targets[i, end_epoch3 + 1:end_epoch4, 0] = hi
-#         mask[i, end_epoch0:end_epoch3 + 1] = 0
-#
-#     # Split
-#     split_at = num_trials - int(num_trials * fraction_validation_trials)
-#     inputs_train, inputs_val = inputs[:split_at], inputs[split_at:]
-#     targets_train, targets_val = targets[:split_at], targets[split_at:]
-#     mask_train, mask_val = mask[:split_at], mask[split_at:]
-#
-#     return inputs_train, targets_train, mask_train, inputs_val, targets_val, mask_val
