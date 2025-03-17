@@ -2,9 +2,6 @@
 Train 100 full-rank Ctx networks and make diverse analyses (epairs, truncations, resampling)
 """
 
-import sys
-sys.path.append('../')
-
 from low_rank_rnns import raposo, clustering
 from low_rank_rnns.regressions import regression_raposo
 from low_rank_rnns import mixedselectivity as ms
@@ -32,7 +29,9 @@ losses_res = np.zeros((n_nets, n_samples, len(ranks_trunc)))
 cdistr = []
 
 for i in range(n_nets):
-    net = FullRankRNN(input_size, hidden_size, 1, noise_std, alpha, rho=.1, train_wi=True)
+    net = FullRankRNN(
+        input_size, hidden_size, 1, noise_std, alpha, rho=0.1, train_wi=True
+    )
     w0 = net.wrec.detach().numpy().copy()
     train(net, x_train, y_train, mask_train, 40, lr=1e-4, keep_best=True, cuda=True)
     # net.load_state_dict(torch.load(f'../models/raposo_many_fr/{i}.pt', map_location='cpu'))
@@ -51,15 +50,25 @@ for i in range(n_nets):
     # Truncating accuracies and losses
     for j, rank in enumerate(ranks_trunc):
         wrec = w0 + (u[:, :rank] * s[:rank]) @ v[:rank]
-        net_trunc = FullRankRNN(input_size, hidden_size, 1, noise_std, alpha, wi_init=net.wi_full, wo_init=net.wo_full,
-                                wrec_init=torch.from_numpy(wrec))
+        net_trunc = FullRankRNN(
+            input_size,
+            hidden_size,
+            1,
+            noise_std,
+            alpha,
+            wi_init=net.wi_full,
+            wo_init=net.wo_full,
+            wrec_init=torch.from_numpy(wrec),
+        )
         loss, acc = raposo.test(net_trunc, x_val, y_val, mask_val)
         trunc_accs[i, j] = acc
         trunc_losses[i, j] = loss
 
     # Regression analysis
     reg_space, r2 = regression_raposo(net)
-    p_reg, c_reg, angles_mc = ms.epairs(reg_space, 500, plot=False, return_mc_distr=True)
+    p_reg, c_reg, angles_mc = ms.epairs(
+        reg_space, 500, plot=False, return_mc_distr=True
+    )
     preg_vals.append(p_reg)
     creg_vals.append(c_reg)
 
@@ -76,7 +85,15 @@ for i in range(n_nets):
     for j, rank in enumerate(ranks_trunc):
         m = u[:, :rank]
         n = v[:rank].T
-        conn_space = np.concatenate([wi.reshape((-1, input_size)), wo.reshape((-1, 1)), m.reshape((-1, rank)), n.reshape((-1, rank))], axis=1)
+        conn_space = np.concatenate(
+            [
+                wi.reshape((-1, input_size)),
+                wo.reshape((-1, 1)),
+                m.reshape((-1, rank)),
+                n.reshape((-1, rank)),
+            ],
+            axis=1,
+        )
         print(conn_space.shape)
         p, c = ms.epairs(conn_space, 500, plot=False)
         p_vals[i, j] = p
@@ -85,21 +102,50 @@ for i in range(n_nets):
     for j, rank in enumerate(ranks_trunc):
         m = u[:, :rank] * s[:rank] * np.sqrt(hidden_size)
         n = v[:rank].T * np.sqrt(hidden_size)
-        net_trunc = LowRankRNN(input_size, hidden_size, 1, noise_std, alpha, rank=rank, wi_init=net.wi_full,
-                               wo_init=net.wo_full * hidden_size, m_init=torch.from_numpy(m), n_init=torch.from_numpy(n))
+        net_trunc = LowRankRNN(
+            input_size,
+            hidden_size,
+            1,
+            noise_std,
+            alpha,
+            rank=rank,
+            wi_init=net.wi_full,
+            wo_init=net.wo_full * hidden_size,
+            m_init=torch.from_numpy(m),
+            n_init=torch.from_numpy(n),
+        )
         net_res = clustering.to_support_net(net_trunc, np.zeros(hidden_size))
 
         for k in range(n_samples):
             net_res.resample_basis()
             wrec_reb = w0 + (net_res.m @ net_res.n.t()).detach().numpy()
-            net_reb = FullRankRNN(input_size, hidden_size, 1, noise_std, alpha, wi_init=net_res.wi_full, wo_init=net_res.wo_full,
-                                  wrec_init=torch.from_numpy(wrec_reb))
+            net_reb = FullRankRNN(
+                input_size,
+                hidden_size,
+                1,
+                noise_std,
+                alpha,
+                wi_init=net_res.wi_full,
+                wo_init=net_res.wo_full,
+                wrec_init=torch.from_numpy(wrec_reb),
+            )
             loss, acc = raposo.test(net_reb, x_val, y_val, mask_val)
             accs_res[i, k, j] = acc
             losses_res[i, k, j] = loss
 
 
-np.savez('../data/raposo_fr_results3.npz', p_vals, c_vals, preg_vals, creg_vals, acc_vals, loss_vals, trunc_accs, trunc_losses,
-         accs_res, losses_res)
+np.savez(
+    "../data/raposo_fr_results3.npz",
+    p_vals,
+    c_vals,
+    preg_vals,
+    creg_vals,
+    acc_vals,
+    loss_vals,
+    trunc_accs,
+    trunc_losses,
+    accs_res,
+    losses_res,
+)
 
-np.save('../data/raposo_fr_c_boot_distr3.npy', np.array(cdistr))
+np.save("../data/raposo_fr_c_boot_distr3.npy", np.array(cdistr))

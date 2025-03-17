@@ -2,9 +2,6 @@
 Train 100 low-rank networks on the working mem task and make diverse analyses (epairs, truncations, resampling)
 """
 
-import sys
-sys.path.append('../')
-
 from low_rank_rnns import romo, clustering
 from low_rank_rnns.regressions import regression_romo
 from low_rank_rnns import mixedselectivity as ms
@@ -29,7 +26,17 @@ cdistr_loadings = []
 for i in range(n_nets):
     x_train, y_train, mask_train, x_val, y_val, mask_val = romo.generate_data(1000)
     net_fr = FullRankRNN(1, hidden_size, 1, noise_std, alpha)
-    train(net_fr, x_train, y_train, mask_train, n_epochs=5, lr=lr_base / sqrt(hidden_size), batch_size=32, keep_best=True, cuda=True)
+    train(
+        net_fr,
+        x_train,
+        y_train,
+        mask_train,
+        n_epochs=5,
+        lr=lr_base / sqrt(hidden_size),
+        batch_size=32,
+        keep_best=True,
+        cuda=True,
+    )
     x_val, y_val, mask_val = map_device([x_val, y_val, mask_val], net_fr)
     out = net_fr.forward(x_val)
     print("Final loss: {:.3f}".format(loss_mse(out, y_val, mask_val)))
@@ -42,12 +49,39 @@ for i in range(n_nets):
     print(wo_init.std())
     wrec = net_fr.wrec.detach().cpu().numpy()
     u, s, v = np.linalg.svd(wrec)
-    m_init = torch.from_numpy(s[:2] * u[:, :2]).to(device=net_fr.wrec.device) * sqrt(hidden_size)
-    n_init = torch.from_numpy(v[:2, :].transpose()).to(device=net_fr.wrec.device) * sqrt(hidden_size)
+    m_init = torch.from_numpy(s[:2] * u[:, :2]).to(device=net_fr.wrec.device) * sqrt(
+        hidden_size
+    )
+    n_init = torch.from_numpy(v[:2, :].transpose()).to(
+        device=net_fr.wrec.device
+    ) * sqrt(hidden_size)
     print(m_init.std())
     print(n_init.std())
-    net = LowRankRNN(1, hidden_size, 1, noise_std, alpha, rank=2, wi_init=wi_init, wo_init=wo_init, m_init=m_init, n_init=n_init)
-    train(net, x_train, y_train, mask_train, n_epochs=100, lr=lr_base, batch_size=32, keep_best=True, cuda=True, clip_gradient=1, early_stop=0.01)
+    net = LowRankRNN(
+        1,
+        hidden_size,
+        1,
+        noise_std,
+        alpha,
+        rank=2,
+        wi_init=wi_init,
+        wo_init=wo_init,
+        m_init=m_init,
+        n_init=n_init,
+    )
+    train(
+        net,
+        x_train,
+        y_train,
+        mask_train,
+        n_epochs=100,
+        lr=lr_base,
+        batch_size=32,
+        keep_best=True,
+        cuda=True,
+        clip_gradient=1,
+        early_stop=0.01,
+    )
     x_val, y_val, mask_val = map_device([x_val, y_val, mask_val], net)
     out = net.forward(x_val)
     loss, acc = romo.test_romo(net, x_val, y_val, mask_val)
@@ -58,12 +92,12 @@ for i in range(n_nets):
 
     net = net.cpu()
     net._define_proxy_parameters()
-    m1 = net.m[:,0].detach().numpy()
-    n1 = net.n[:,0].detach().numpy()
-    m2 = net.m[:,1].detach().numpy()
-    n2 = net.n[:,1].detach().numpy()
+    m1 = net.m[:, 0].detach().numpy()
+    n1 = net.n[:, 0].detach().numpy()
+    m2 = net.m[:, 1].detach().numpy()
+    n2 = net.n[:, 1].detach().numpy()
     wi = net.wi_full[0].detach().numpy()
-    wo = net.wo_full[:,0].detach().numpy()
+    wo = net.wo_full[:, 0].detach().numpy()
     vectors = [-wi, n1, n2, m1, m2, -wo]
 
     conn_space = np.array([wi, n1, n2, m1, m2]).transpose()
@@ -93,6 +127,15 @@ for i in range(n_nets):
     accs_res.append(accs_tmp)
     losses_res.append(losses_tmp)
 
-np.savez('../data/romo_results3.npz', p_vals, c_vals, preg_vals, creg_vals, acc_vals, loss_vals,
-         accs_res, losses_res)
-np.save('../data/romo_lr_c_boot_distr.npy', np.array(cdistr_loadings))
+np.savez(
+    "../data/romo_results3.npz",
+    p_vals,
+    c_vals,
+    preg_vals,
+    creg_vals,
+    acc_vals,
+    loss_vals,
+    accs_res,
+    losses_res,
+)
+np.save("../data/romo_lr_c_boot_distr.npy", np.array(cdistr_loadings))

@@ -10,3 +10,4 @@ figures/
 *.png
 *.ai
 *.virtual_documents
+**/*.egg-info
