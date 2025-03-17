@@ -413,7 +413,10 @@ def compute_choice_sensory_regressors_split_ctx(net,epoch_start,epoch_end,data_t
     return r1,r2
 
 
-def compute_ctx_regressors(net, epoch_start, epoch_end, rates=True):
+def compute_ctx_regressors(net):
+    epoch_start = mante.fixation_duration_discrete
+    epoch_end = mante.stim_begin
+
     input_trial, y_train, mask_train, epochs = mante.generate_mante_data(1,coh_color_spec=0, coh_motion_spec=0, context_spec=+1,std=0)
     inputs_array = 0*input_trial
 
@@ -450,8 +453,7 @@ def compute_ctx_regressors(net, epoch_start, epoch_end, rates=True):
     inputs_array = torch.from_numpy(inputs_array)
 
     output,trajectories= net.forward(inputs_array,return_dynamics=True)
-    if rates:
-        trajectories = torch.tanh(trajectories)
+    trajectories = torch.tanh(trajectories)
     stimulation_epoch = np.arange(epoch_start,epoch_end)
     variables_to_be_regressed = torch.mean(trajectories[:,stimulation_epoch,:],dim=1)
     variables_to_be_regressed1 = variables_to_be_regressed.detach().numpy()
@@ -460,11 +462,10 @@ def compute_ctx_regressors(net, epoch_start, epoch_end, rates=True):
     X = X.T
     reg = LinearRegression().fit(X,variables_to_be_regressed1)
     r = reg.coef_
-#    plt.figure(1);plt.plot(r[:,0],r[:,1],'*')
     return r
 
 
-def compute_single_ctx_regressors(net, epoch_start, epoch_end):
+def compute_single_ctx_regressors(net):
     """
     Compute regressors towards context, during the context-cue-only epoch.
 
@@ -475,6 +476,8 @@ def compute_single_ctx_regressors(net, epoch_start, epoch_end):
     input_trial = mante.generate_specified_input(0, 0, 2, 1, 0.)
     inputs[1] = input_trial
     context_vector = np.array([1, -1])
+    epoch_start = mante.fixation_duration_discrete
+    epoch_end = mante.stim_begin
 
     output, trajectories = net.forward(inputs, return_dynamics=True)
     trajectories = torch.tanh(trajectories)

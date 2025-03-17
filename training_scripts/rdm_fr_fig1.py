@@ -41,7 +41,7 @@ for i in range(n_nets):
     print("final loss: {}\nfinal accuracy: {}".format(loss, acc))
     acc_vals.append(acc)
     loss_vals.append(loss)
-    torch.save(net.state_dict(), f"../models/rdm_many_fr3/{i}.pt")
+    torch.save(net.state_dict(), f"../models/rdm_many_fr/{i}.pt")
 
     net = net.cpu()
     net._define_proxy_parameters()
@@ -101,6 +101,6 @@ for i in range(n_nets):
             losses_res[i, k, j] = loss
 
 
-np.savez('../data/rdm_fr_results3.npz', p_vals, c_vals, preg_vals, creg_vals, acc_vals, loss_vals, trunc_accs, trunc_losses,
+np.savez('../data/rdm_fr_results.npz', p_vals, c_vals, preg_vals, creg_vals, acc_vals, loss_vals, trunc_accs, trunc_losses,
          accs_res, losses_res)
-np.save('../data/rdm_fr_c_boot_distr3.npy', np.array(cdistr))
+np.save('../data/rdm_fr_c_boot_distr.npy', np.array(cdistr))

@@ -1,0 +1,20 @@
+[project]
+name = "low_rank_rnns"
+version = "0.1.0"
+description = "Code for Dubreuil, Valente et al 2022, 'The role of population structure in computations through neural dynamics'"
+authors = [
+    {name = "Adrian Valente", email = "adrian.valente@ens.fr"},
+    {name = "Alexis Dubreuil", email = "alexis.dubreuil@gmail.com"},
+]
+readme = "readme.md"
+dependencies = [
+    "torch",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "jupyter"
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
